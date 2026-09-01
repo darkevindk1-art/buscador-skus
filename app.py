@@ -5,13 +5,20 @@ import urllib.parse
 from bs4 import BeautifulSoup
 import os
 
-st.set_page_config(page_title="Buscador Universal de Tienda", layout="centered", page_icon="🛍️")
+st.set_page_config(page_title="Buscador Multiproducto", layout="centered", page_icon="🛍️")
 
 st.title("🛍️ Buscador Multiproducto")
 
+def obtener_nombre_comercial(sku, marca):
+    """Genera un nombre legible a partir del SKU si no hay columna de descripción."""
+    s = str(sku).upper()
+    import re
+    s_clean = re.sub(r'(-EX|\+BDL|BUNDLE|-YA|/A|BE/A|LZ/A|GWW|FLTP|LTP)$', '', s)
+    return f"{str(marca).title()} {s_clean}"
+
 @st.cache_data
 def cargar_datos():
-    # Detecta automáticamente si subiste un CSV o un Excel
+    # Detectar el archivo disponible
     archivo = "PRECIOS CELULARES.xlsx"
     if os.path.exists("CATALOGO_GENERAL.csv"):
         archivo = "CATALOGO_GENERAL.csv"
@@ -23,25 +30,33 @@ def cargar_datos():
     else:
         df = pd.read_excel(archivo)
     
-    # Limpieza estándar de columnas básicas
-    col_sku = [c for c in df.columns if 'COD' in c.upper() or 'SKU' in c.upper()][0]
-    col_precio = [c for c in df.columns if 'PRECIO' in c.upper() or 'OFERTA' in c.upper()][0]
-    col_marca = [c for c in df.columns if 'MARCA' in c.upper()][0]
-    col_linea = [c for c in df.columns if 'LINEA' in c.upper() or 'CATEGORIA' in c.upper()]
-    col_nombre = [c for c in df.columns if 'NOMBRE' in c.upper() or 'DESCRIPCION' in c.upper() or 'PRODUCTO' in c.upper()]
+    cols = df.columns.tolist()
+    
+    # 1. Detectar Columna SKU
+    col_sku = next((c for c in cols if any(k in c.upper() for k in ['CÓDIGO', 'CODIGO', 'SKU', 'COD'])), cols[0])
+    
+    # 2. Detectar Columna Precio
+    col_precio = next((c for c in cols if any(k in c.upper() for k in ['PRECIO', 'OFERTA', 'VALOR'])), cols[1] if len(cols)>1 else cols[0])
+    
+    # 3. Detectar Columna Marca
+    col_marca = next((c for c in cols if 'MARCA' in c.upper()), None)
+    
+    # 4. Detectar Columna Línea / Categoría
+    col_linea = next((c for c in cols if any(k in c.upper() for k in ['LÍNEA', 'LINEA', 'CATEGORIA', 'CATEGORÍA'])), None)
+    
+    # 5. Detectar Columna Nombre Comercial / Descripción
+    col_nombre = next((c for c in cols if any(k in c.upper() for k in ['NOMBRE', 'DESCRIPCION', 'DESCRIPCIÓN', 'PRODUCTO'])), None)
 
+    # Crear columnas estandarizadas de forma segura
     df['SKU_Clean'] = df[col_sku].astype(str).str.strip().str.rstrip(',')
-    df['Marca_Clean'] = df[col_marca].astype(str).str.strip().str.upper()
     df['Precio_Clean'] = pd.to_numeric(df[col_precio], errors='coerce')
+    df['Marca_Clean'] = df[col_marca].astype(str).str.strip().str.upper() if col_marca else "GENERAL"
+    df['Categoria_Clean'] = df[col_linea].astype(str).str.strip().str.upper() if col_linea else "GENERAL"
     
-    # Manejar Línea / Categoría
-    df['Categoria_Clean'] = df[col_linea[0]].astype(str).str.strip().str.upper() if col_linea else "GENERAL"
-    
-    # Manejar Nombre Comercial
     if col_nombre:
-        df['Nombre_Comercial'] = df[col_nombre[0]].astype(str).str.strip()
+        df['Nombre_Comercial'] = df[col_nombre].astype(str).str.strip()
     else:
-        df['Nombre_Comercial'] = df['Marca_Clean'] + " " + df['SKU_Clean']
+        df['Nombre_Comercial'] = df.apply(lambda r: obtener_nombre_comercial(r['SKU_Clean'], r['Marca_Clean']), axis=1)
         
     return df
 
@@ -63,7 +78,6 @@ def buscar_modelo_web(consulta):
         return "Búsqueda web no disponible."
 
 def mostrar_hermanos(df, marca_clean, categoria_clean, sku_excluir=""):
-    # Filtra por la misma MARCA y la misma CATEGORÍA/LÍNEA (ej. solo licuadoras Oster o solo congeladoras Indurama)
     hermanos = df[
         (df['Marca_Clean'] == marca_clean) & 
         (df['Categoria_Clean'] == categoria_clean) & 
@@ -87,16 +101,16 @@ def mostrar_hermanos(df, marca_clean, categoria_clean, sku_excluir=""):
 try:
     df = cargar_datos()
 
-    busqueda_raw = st.text_input("🔍 Ingresa SKU o Nombre del Producto (ej: SKU, Licuadora Oster, Congeladora, etc.):", "").strip()
+    busqueda_raw = st.text_input("🔍 Ingresa SKU o Nombre del Producto (ej: MTP03BE/A, Samsung S26, Licuadora, etc.):", "").strip()
 
     if busqueda_raw:
         busqueda = busqueda_raw.upper()
         palabras_clave = busqueda.split()
         
-        # 1. Búsqueda directa por SKU exacto
+        # Búsqueda por SKU
         resultado_sku = df[df['SKU_Clean'].str.upper() == busqueda]
         
-        # 2. Búsqueda inteligente por coincidencias de texto
+        # Búsqueda por coincidencias de texto
         condiciones = [
             df['SKU_Clean'].str.upper().str.contains(p, na=False) | 
             df['Marca_Clean'].str.contains(p, na=False) |
@@ -117,7 +131,7 @@ try:
             prod = resultado_sku.iloc[0]
             st.success("✅ Producto Encontrado por SKU")
             
-            st.metric("Precio Actualizado", f"S/ {prod['Precio_Clean']:.2f}" if pd.notnull(prod['Precio_Clean']) else "Sin Precio registrado")
+            st.metric("Precio Actualizado", f"S/ {prod['Precio_Clean']:.2f}" if pd.notnull(prod['Precio_Clean']) else "Sin Precio")
             st.write(f"**Nombre Comercial:** {prod['Nombre_Comercial']}")
             st.write(f"**Categoría / Línea:** {prod['Categoria_Clean']}")
             st.write(f"**Código / SKU:** `{prod['SKU_Clean']}`")
@@ -128,12 +142,12 @@ try:
         elif not coincidencias_bd.empty:
             st.success(f"🔎 Se encontraron {len(coincidencias_bd)} productos relacionados:")
             
-            sku_sel = st.selectbox("Selecciona un producto para ver detalle:", coincidencias_bd['SKU_Clean'].tolist())
+            sku_sel = st.selectbox("Selecciona un producto de la lista:", coincidencias_bd['SKU_Clean'].tolist())
             
             if sku_sel:
                 prod = coincidencias_bd[coincidencias_bd['SKU_Clean'] == sku_sel].iloc[0]
                 
-                st.metric("Precio Actualizado", f"S/ {prod['Precio_Clean']:.2f}" if pd.notnull(prod['Precio_Clean']) else "Sin Precio registrado")
+                st.metric("Precio Actualizado", f"S/ {prod['Precio_Clean']:.2f}" if pd.notnull(prod['Precio_Clean']) else "Sin Precio")
                 st.write(f"**Nombre Comercial:** {prod['Nombre_Comercial']}")
                 st.write(f"**Categoría / Línea:** {prod['Categoria_Clean']}")
                 st.write(f"**Código / SKU:** `{prod['SKU_Clean']}`")
@@ -141,7 +155,7 @@ try:
                 
                 mostrar_hermanos(df, prod['Marca_Clean'], prod['Categoria_Clean'], prod['SKU_Clean'])
         else:
-            st.warning(f"⚠️ Producto no encontrado en inventario local. Consultando web para '{busqueda_raw}'...")
+            st.warning(f"⚠️ No se encontró en el archivo local. Buscando en la web...")
             with st.spinner("🔎 Buscando en la web..."):
                 desc_web = buscar_modelo_web(busqueda_raw)
             st.info(f"**Resultado Web:**\n\n{desc_web}")
