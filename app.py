@@ -131,13 +131,3 @@ try:
 
 except Exception as e:
     st.error(f"Error al procesar la búsqueda: {e}")
-        else:
-            # Si no está en el Excel por SKU, buscar el término comercial en la web
-            st.warning("⚠️ No se encontró el código exacto en el Excel. Buscando por nombre comercial...")
-            with st.spinner("🔎 Buscando en la web..."):
-                desc_web = buscar_modelo_web(busqueda)
-            
-            st.info(f"**Resultado de búsqueda web:** {desc_web}")
-
-except Exception as e:
-    st.error(f"Error al procesar la búsqueda: {e}")
